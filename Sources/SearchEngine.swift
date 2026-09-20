@@ -137,7 +137,9 @@ final class SearchEngine: ObservableObject {
             selected = 0
         }
         // An empty search, or a request for a Settings page that matched one: no file search.
-        guard !query.isEmpty, launchables.isEmpty || !Launcher.isSettingsRequest(query) else {
+        let opensSomething = !launchables.isEmpty
+            && (Launcher.isSettingsRequest(query) || Launcher.isLaunchRequest(query, matches: launchables))
+        guard !query.isEmpty, !opensSomething else {
             plan = nil
             results = []
             chips = makeChips(nil)

@@ -2,7 +2,7 @@ import AppKit
 
 /// Something Seek can open that isn't a file: an app, a System Settings page or section, or a Finder folder.
 struct Launchable: Identifiable, Hashable {
-    enum Kind: Hashable { case app, settings, place, person, web, tab, hint }
+    enum Kind: Hashable { case app, settings, place, person, web, tab, deeplink, hint }
 
     let id: String
     let kind: Kind
@@ -14,16 +14,20 @@ struct Launchable: Identifiable, Hashable {
     /// Names people use for it, as phrases: the title plus synonyms ("dark mode" for Appearance).
     let phrases: [String]
     var isPrivacySection = false
+    /// Overrides the kind label on the row, so a page that opens in Slack says so.
+    var badge: String?
 
     var label: String {
+        if let badge { return badge }
         switch kind {
-        case .app: "App"
-        case .settings: "Settings"
-        case .place: "Folder"
-        case .person: "Teams"
-        case .web: "Web"
-        case .tab: "Tab"
-        case .hint: "Set up"
+        case .app: return "App"
+        case .settings: return "Settings"
+        case .place: return "Folder"
+        case .person: return "Teams"
+        case .web: return "Web"
+        case .tab: return "Tab"
+        case .deeplink: return "App"
+        case .hint: return "Set up"
         }
     }
 }
@@ -60,6 +64,10 @@ enum Launcher {
         switch item.kind {
         case .app: NSWorkspace.shared.openApplication(at: item.target, configuration: NSWorkspace.OpenConfiguration())
         case .settings, .place, .person, .web: NSWorkspace.shared.open(item.target)
+        case .deeplink:
+            // id carries "deeplink:<bundle>|<web address>", so a link the app refuses still opens in the browser.
+            let parts = item.id.dropFirst("deeplink:".count).split(separator: "|", maxSplits: 1).map(String.init)
+            Recipes.open(item.target, bundle: parts.first ?? "", fallback: parts.count > 1 ? URL(string: parts[1]) : nil)
         case .tab: ChromeTabs.focus(item)
         case .hint: break // the panel opens Seek's Settings
         }
@@ -77,6 +85,18 @@ enum Launcher {
     /// "open bluetooth settings", "screen recording permission": the search is about Settings, not files.
     static func isSettingsRequest(_ query: String) -> Bool {
         Words.split(query).contains { settingsCues.contains($0.text.lowercased()) }
+    }
+
+    /// "open slack", "launch figma": the search names something to open and a match carries that name,
+    /// so the files that merely mention the word are noise.
+    static func isLaunchRequest(_ query: String, matches: [Launchable]) -> Bool {
+        let words = Words.split(query).map { $0.text.lowercased() }
+        guard words.contains(where: openCues.contains) else { return false }
+        let core = Set(words.filter { !ignored.contains($0) && !Words.filler.contains($0) }.flatMap(tokens))
+        guard !core.isEmpty else { return false }
+        return matches.contains { match in
+            [.app, .place, .settings].contains(match.kind) && Set(tokens(match.title)).isSubset(of: core)
+        }
     }
 
     /// Launchables that match the search well enough to show above the files. Empty for ordinary file searches.

@@ -172,6 +172,7 @@ struct SearchView: View {
         case .place: "Open folder"
         case .person: "Open in Teams"
         case .web: "Open in browser"
+        case .deeplink: "Open in app"
         case .tab: "Go to tab"
         case .hint: "Add in Settings"
         }

@@ -66,13 +66,9 @@ enum AppleReader {
         return merge(reading, into: QuickPlanner.plan(query, now: now), query: query, now: now)
     }
 
-    private static let sizeCues: Set<String> = ["big", "bigger", "large", "larger", "huge", "small", "smaller", "tiny",
-                                                "size", "heavy", "gb", "mb", "kb"]
-
     static func merge(_ reading: Reading, into base: Plan, query: String, now: Date) -> Plan {
         var plan = base
         plan.reader = .apple
-        let lower = query.lowercased()
         let typed = Set(Words.split(query).map { $0.text.lowercased() })
         func clean(_ phrases: [String]) -> [String] {
             phrases.flatMap { $0.split(separator: " ").map(String.init) }
@@ -97,7 +93,7 @@ enum AppleReader {
            let kind = FileKind.allCases.first(where: { "\($0)" == "\(reading.kind)" }) {
             plan.kind = kind
         }
-        let mentionsSize = !typed.isDisjoint(with: sizeCues) || lower.range(of: #"\d\s*(gb|mb|kb)\b"#, options: .regularExpression) != nil
+        let mentionsSize = !typed.isDisjoint(with: QuickPlanner.sizeWords) || QuickPlanner.mentionsNumber(query, unit: true)
         if !plan.hasSizeFilter, mentionsSize {
             switch reading.size {
             case .small: plan.size = .small

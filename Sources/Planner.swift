@@ -36,19 +36,30 @@ enum JevPlanner {
             && !QuickPlanner.filterWords.contains(word.text.lowercased()) {
             plan.keywords.append(word.text)
         }
+        // Each filter needs a word in the search behind it: Jev fills "when" and "order" on searches that
+        // never mention either ("open slack" came back as files changed today).
+        let typed = Set(words.map { $0.text.lowercased() })
         plan.kind = answers["kind"]?.picked(FileKind.self) ?? .any
-        plan.place = answers["place"]?.picked(Place.self) ?? .anywhere
-        plan.size = answers["size"]?.picked(SizeHint.self) ?? .any
-        plan.order = answers["order"]?.picked(Order.self) ?? .best
+        if !typed.isDisjoint(with: QuickPlanner.placeWords) {
+            plan.place = answers["place"]?.picked(Place.self) ?? .anywhere
+        }
+        if !typed.isDisjoint(with: QuickPlanner.sizeWords) || QuickPlanner.mentionsNumber(query, unit: true) {
+            plan.size = answers["size"]?.picked(SizeHint.self) ?? .any
+        }
+        if !typed.isDisjoint(with: QuickPlanner.orderWords) || !typed.isDisjoint(with: QuickPlanner.timeWords)
+            || !typed.isDisjoint(with: QuickPlanner.sizeWords) {
+            plan.order = answers["order"]?.picked(Order.self) ?? .best
+        }
 
         let month = answers["month"]?.picked(Month.self).flatMap { $0 == .unnamed ? nil : $0 }
         let year = answers["year"].flatMap { answer -> Int? in
             guard let choice = answer.choice, (answer.probabilities?[choice] ?? 1) >= 0.5 else { return nil }
             return Int(choice)
         }
-        if month != nil || year != nil {
+        let mentionsTime = !typed.isDisjoint(with: QuickPlanner.timeWords) || QuickPlanner.mentionsNumber(query, unit: false)
+        if mentionsTime, month != nil || year != nil {
             (plan.dates, plan.datesLabel) = Dates.named(month: month, year: year, now: now)
-        } else if let window = answers["when"]?.picked(TimeWindow.self), window != .any {
+        } else if mentionsTime, let window = answers["when"]?.picked(TimeWindow.self), window != .any {
             plan.dates = window.interval(now: now)
             plan.datesLabel = window.label
         }
@@ -98,6 +109,25 @@ enum QuickPlanner {
         map["sept"] = .september
         return map
     }()
+
+    /// Words that support a filter. A reader may only set a filter the search actually mentions:
+    /// both Jev and Apple's model otherwise invent a date, a place or an order the user never gave.
+    static let timeWords: Set<String> = {
+        var words = Set(months.keys)
+        for phrase in windows.keys { words.formUnion(phrase.split(separator: " ").map(String.init)) }
+        return words.union(["ago", "day", "days", "week", "weeks", "month", "months", "year", "years",
+                            "earlier", "since", "before", "after", "morning", "night", "weekend"])
+    }()
+    static let placeWords: Set<String> = Set(places.keys).union(["documents", "folder", "folders", "drive", "finder"])
+    static let sizeWords: Set<String> = ["big", "bigger", "biggest", "large", "larger", "largest", "huge", "small",
+                                         "smaller", "smallest", "tiny", "size", "gb", "mb", "kb", "heavy"]
+    static let orderWords: Set<String> = Set(orders.keys).union(["first", "recent", "recently", "newer", "older"])
+
+    /// Whether the search mentions a year (2026) or a size (500mb), which no word list can enumerate.
+    static func mentionsNumber(_ query: String, unit: Bool) -> Bool {
+        let pattern = unit ? #"\d+\s*(kb|mb|gb|k|m|g|megs|gigs)\b"# : #"\b(19|20)\d{2}\b"#
+        return query.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     /// Words that name a kind of file, including a few the lists leave to Apple's model to map.
     static let kindWords: Set<String> = Set(kinds.keys).union(["documents", "recording", "recordings", "clip", "clips", "footage"])

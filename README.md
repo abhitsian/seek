@@ -32,7 +32,21 @@ The standard editing keys work in the search field: ⌘A, ⌘C, ⌘V, ⌘X, ⌘Z
 - Apps come from /Applications, /System/Applications, ~/Applications and one folder level below them; the list rebuilds when the panel opens, at most once a minute.
 - `Seek --launchables` prints the whole catalog.
 
-Other apps' internal sections have no public list, so deep links go only as far as opening the app, with two exceptions below.
+**Deep links into other apps** work from your own history rather than from guessed grammars. A Slack channel, a Notion page or a Figma file you have opened carries its id in the URL, so a recipe reads the id back out and rewrites the address for the desktop app:
+
+```json
+{ "app": "Slack", "bundle": "com.tinyspeck.slackmacgap", "entity": "channel",
+  "match": "app\\.slack\\.com/client/(?<team>T[A-Z0-9]+)/(?<id>[CDG][A-Z0-9]+)",
+  "open": "slack://channel?team={team}&id={id}", "words": ["channel", "dm"] }
+```
+
+Recipes ship for Slack, Teams, Figma, Notion, Zoom and Spotify, and `~/Library/Application Support/Seek/recipes.json` adds more. Three rules keep it honest:
+
+- **A rewrite is optional.** No recipe, or the app is not installed, and the web address opens as before.
+- **A rewrite is checked, not trusted.** After opening a desktop link, Seek looks at which app came to the front; if it is not the right one, the browser gets the original address and the miss is counted in `recipe-misses.json`.
+- **Teaching fills gaps only.** `Seek --teach Linear "https://linear.app/team/issue/ENG-123/title"` derives a pattern from one address you paste, taking the scheme from the app's own Info.plist. It refuses when a recipe already handles that address, since a derived template only guesses at a grammar the shipped one knows.
+
+`Seek --rewrite <url>` shows which recipe would fire.
 
 **Teams and the browser.** Seek reads a few kinds of request from the words and replaces the file search with the action:
 

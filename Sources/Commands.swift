@@ -296,8 +296,11 @@ enum People {
 /// so Seek reads a copy it refreshes at most every ten minutes. Nothing leaves the Mac.
 enum BrowserHistory {
     private static let chrome = NSHomeDirectory() + "/Library/Application Support/Google/Chrome"
-    private static let cues: Set<String> = ["site", "page", "tab", "link", "website", "web", "doc", "docs", "sheet",
-                                            "dashboard", "browser", "url", "chrome", "wiki", "ticket", "board"]
+    private static var cues: Set<String> {
+        // "channel", "figma", "page": the words that name something a recipe can open in its own app.
+        Set(["site", "page", "tab", "link", "website", "web", "doc", "docs", "sheet", "dashboard", "browser",
+             "url", "chrome", "wiki", "ticket", "board"]).union(Recipes.entityWords)
+    }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var copiedAt = Date.distantPast
 
@@ -340,6 +343,13 @@ enum BrowserHistory {
             .prefix(limit)
             .compactMap { page in
                 guard let url = URL(string: page.url) else { return nil }
+                // A page whose app is on this Mac opens there instead of in a tab.
+                if let (recipe, link) = Recipes.rewrite(page.url) {
+                    return Launchable(id: "deeplink:\(recipe.bundle)|\(page.url)", kind: .deeplink, title: page.title,
+                                      subtitle: "Opens in \(recipe.app) · \(url.host ?? "") · from your browser history",
+                                      target: link, iconPath: Recipes.appPath(recipe.bundle) ?? Commands.browserPath,
+                                      phrases: [], badge: recipe.app)
+                }
                 return Launchable(id: "page:" + page.url, kind: .web, title: page.title,
                                   subtitle: (url.host ?? "") + " · from your browser history",
                                   target: url, iconPath: Commands.browserPath, phrases: [])

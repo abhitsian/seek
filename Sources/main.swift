@@ -18,6 +18,28 @@ if arguments.contains("--store-key") {
     exit(0)
 }
 
+/// `Seek --rewrite <url>` shows which recipe, if any, turns a web address into an app link.
+if let flag = arguments.firstIndex(of: "--rewrite"), flag + 1 < arguments.count {
+    let address = arguments[flag + 1]
+    if let (recipe, link) = Recipes.rewrite(address) {
+        print("\(recipe.app) · \(link.absoluteString)")
+    } else {
+        print("no recipe matched (installed apps only)")
+    }
+    exit(0)
+}
+
+/// `Seek --teach <App> <example url>` learns how that app's links are shaped, from one address you paste.
+if let flag = arguments.firstIndex(of: "--teach"), flag + 2 < arguments.count {
+    if let recipe = Recipes.teach(app: arguments[flag + 1], example: arguments[flag + 2]) {
+        Recipes.remember(recipe)
+        print("learned \(recipe.app): \(recipe.match)\n  opens \(recipe.open)")
+    } else {
+        print("could not learn it: the app needs a URL scheme in its Info.plist, and the address needs an id in its path")
+    }
+    exit(0)
+}
+
 /// `Seek --launchables` lists every app, Settings page and folder Seek can open.
 if arguments.contains("--launchables") {
     Launcher.refresh()
