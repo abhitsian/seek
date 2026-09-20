@@ -75,10 +75,11 @@ enum Commands {
 
     /// Rows for the "Apps & actions" section, and whether the search is a command rather than a file search
     /// (then Seek skips the file search). Runs Spotlight and SQLite, so call it off the main thread.
-    static func analyze(_ query: String) -> (rows: [Launchable], isCommand: Bool) {
+    static func analyze(_ query: String, scopes: Set<Scope> = []) -> (rows: [Launchable], isCommand: Bool) {
+        func wants(_ scope: Scope) -> Bool { scopes.isEmpty || scopes.contains(scope) }
         var rows: [Launchable] = [] // people, URLs and web searches; sites and history pages go after the app matches
         var isCommand = false
-        let person = personRequest(query)
+        let person = wants(.people) ? personRequest(query) : nil
         if let person {
             let found = personRows(person)
             if !found.isEmpty, found.first?.kind == .person || person.explicit {
@@ -86,11 +87,11 @@ enum Commands {
                 isCommand = true
             }
         }
-        if let url = typedURL(query) {
+        if wants(.web), let url = typedURL(query) {
             rows.append(web("Open \(url.host ?? url.absoluteString)", url.absoluteString, url: url))
             isCommand = true
         }
-        let search = webSearch(query)
+        let search = wants(.web) ? webSearch(query) : nil
         if let search {
             let base = search.engine == "YouTube" ? "https://www.youtube.com/results?search_query=" : "https://www.google.com/search?q="
             let encoded = search.terms.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? search.terms
@@ -100,12 +101,12 @@ enum Commands {
             }
         }
         // Open tabs: "figma tab", "switch to jira", "tabs" lists them all.
-        let tabs: (rows: [Launchable], isCommand: Bool) = isCommand ? ([], false) : ChromeTabs.rows(for: query)
+        let tabs: (rows: [Launchable], isCommand: Bool) = isCommand || !wants(.tabs) ? ([], false) : ChromeTabs.rows(for: query)
         if tabs.isCommand { return (tabs.rows, true) }
         rows += tabs.rows
-        rows += siteRows(query)
+        if wants(.web) { rows += siteRows(query) }
         // "show … in Finder" is about files; a web page can't be shown in Finder.
-        if !isCommand, Intent.detect(Words.split(query)) != .reveal {
+        if !isCommand, wants(.web), Intent.detect(Words.split(query)) != .reveal {
             // A page that is already open shows once, as its tab.
             let open = Set(tabs.rows.map(\.target.absoluteString))
             rows += BrowserHistory.rows(for: query).filter { !open.contains($0.target.absoluteString) }

@@ -18,7 +18,7 @@ enum ChromeTabs {
     private static let handleState = URL(string: "http://127.0.0.1:4910/api/state")!
     private static let chromeBundle = "com.google.Chrome"
     /// Words that ask for a tab: "the figma tab", "switch to jira", "tabs about pricing".
-    private static let cues: Set<String> = ["tab", "tabs", "switch", "chrome"]
+    private static let cues: Set<String> = ["tab", "tabs", "switch"]
 
     static var chromeRunning: Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: chromeBundle).isEmpty

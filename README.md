@@ -69,6 +69,26 @@ Drag a result into Mail, Slack or a Finder window to use the file there. The chi
 
 When Finder is in front, the panel offers "Only in <folder>" for the folder its front window shows. A search that says "here" or "in this folder" turns it on. The first time, macOS asks whether Seek may control Finder; Seek only reads the front window's folder.
 
+## Scopes
+
+An `@word` narrows the search to one source, and the rest of the line is the search:
+
+| Scope | Searches |
+|---|---|
+| `@files` | Spotlight only |
+| `@apps` | Installed apps and the local apps in ~/claude-apps |
+| `@settings` | System Settings pages and Finder folders |
+| `@tabs` | Open Chrome tabs |
+| `@claude` | Past Claude Code sessions |
+| `@web` | Sites, history and searches |
+| `@people` | Teams chats and calls |
+
+`@app`, `@session`, `@chrome`, `@prefs` and similar aliases work too. Each scope shows as a chip; clicking it drops the scope.
+
+**Local apps.** The 90-odd apps under `~/claude-apps` are mostly small servers rather than .app bundles, so Seek reads their `.claude-app.json`, opens the manifest's URL, and starts the server first when nothing is listening on its port.
+
+**Claude Code sessions.** `~/.claude/projects` holds about a gigabyte of JSONL transcripts. Seek indexes what *you* typed (prompts, not replies or tool traffic) into SQLite full-text search, incrementally: the first pass takes about a minute, later ones cost one stat per file. Headless runs, which open with an instruction to the model rather than a request from you, are skipped; that cut 2,544 transcripts to 224 real sessions. ↩ resumes one with `claude --resume` in a new Terminal window. Unscoped, sessions only appear when the search asks for one ("session", "transcript", "worked on"); `@claude` always searches them.
+
 ## How a search runs
 
 1. **Instant pass, no model.** Word lists read the search: file kind, dates ("last month", "2 weeks ago", "March 2026"), place, sort order, size ("over 500 MB") and intent ("open", "show in Finder", "delete"). Spotlight matches file names. Results show while you type.
@@ -108,6 +128,7 @@ TYPESAFE_ENDPOINT=http://127.0.0.1:8765 TYPESAFE_API_KEY=test ~/Applications/See
 | `Sources/Planner.swift` | `JevPlanner` (one request) and `QuickPlanner` (word lists, sizes, "N ago") |
 | `Sources/AppleReader.swift` | Apple Intelligence reader: `@Generable` schema, prewarming, and the merge that keeps only answers the search's words support |
 | `Sources/Spotlight.swift` | MDQuery wrapper, candidate retrieval with loosening, noise filter (Library, node_modules, hidden folders, app bundles) |
+| `Sources/Sessions.swift` | Claude Code transcripts: the full-text index, search, and resuming |
 | `Sources/ChromeTabs.swift` | Open tabs from Handle or Chrome, matching, and switching to a tab |
 | `Sources/Commands.swift` | Teams person requests, People list and author lookup, web searches, URLs, sites, Chrome history and bookmarks |
 | `Sources/Launcher.swift` | Apps, Settings pages and sections, and Finder folders: the catalog, matching and opening |

@@ -2,7 +2,7 @@ import AppKit
 
 /// Something Seek can open that isn't a file: an app, a System Settings page or section, or a Finder folder.
 struct Launchable: Identifiable, Hashable {
-    enum Kind: Hashable { case app, settings, place, person, web, tab, deeplink, hint }
+    enum Kind: Hashable { case app, localApp, settings, place, person, web, tab, deeplink, session, hint }
 
     let id: String
     let kind: Kind
@@ -21,6 +21,8 @@ struct Launchable: Identifiable, Hashable {
         if let badge { return badge }
         switch kind {
         case .app: return "App"
+        case .localApp: return "Local app"
+        case .session: return "Session"
         case .settings: return "Settings"
         case .place: return "Folder"
         case .person: return "Teams"
@@ -28,6 +30,59 @@ struct Launchable: Identifiable, Hashable {
         case .tab: return "Tab"
         case .deeplink: return "App"
         case .hint: return "Set up"
+        }
+    }
+}
+
+/// A scope typed as @files, @apps, @tabs, @claude and so on, which narrows a search to one source.
+enum Scope: String, CaseIterable {
+    case files, apps, settings, tabs, sessions, web, people
+
+    static let aliases: [String: Scope] = [
+        "file": .files, "files": .files, "doc": .files, "docs": .files,
+        "app": .apps, "apps": .apps, "application": .apps,
+        "setting": .settings, "settings": .settings, "prefs": .settings, "preferences": .settings,
+        "tab": .tabs, "tabs": .tabs, "chrome": .tabs, "browser": .tabs,
+        "claude": .sessions, "session": .sessions, "sessions": .sessions, "transcript": .sessions,
+        "web": .web, "history": .web, "site": .web,
+        "people": .people, "person": .people, "teams": .people, "chat": .people,
+    ]
+
+    /// The scopes named in a search, and the search with those words taken out.
+    static func read(_ text: String) -> (scopes: Set<Scope>, rest: String) {
+        var scopes: Set<Scope> = []
+        var kept: [String] = []
+        for word in text.split(separator: " ", omittingEmptySubsequences: false) {
+            if word.hasPrefix("@"), let scope = aliases[word.dropFirst().lowercased()] {
+                scopes.insert(scope)
+            } else {
+                kept.append(String(word))
+            }
+        }
+        return (scopes, kept.joined(separator: " ").trimmingCharacters(in: .whitespaces))
+    }
+
+    var kinds: Set<Launchable.Kind> {
+        switch self {
+        case .files: return []
+        case .apps: return [.app, .localApp]
+        case .settings: return [.settings, .place]
+        case .tabs: return [.tab]
+        case .sessions: return [.session]
+        case .web: return [.web, .deeplink]
+        case .people: return [.person, .hint]
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .files: return "Files"
+        case .apps: return "Apps"
+        case .settings: return "Settings"
+        case .tabs: return "Tabs"
+        case .sessions: return "Claude sessions"
+        case .web: return "Web"
+        case .people: return "People"
         }
     }
 }
@@ -52,7 +107,7 @@ enum Launcher {
     static let refreshed = Notification.Name("SeekLaunchablesRefreshed")
 
     static func refresh() {
-        let built = settingsPages() + privacySections() + places() + apps()
+        let built = settingsPages() + privacySections() + places() + apps() + localApps()
         lock.withLock {
             items = built
             builtAt = Date()
@@ -63,6 +118,8 @@ enum Launcher {
     static func open(_ item: Launchable) {
         switch item.kind {
         case .app: NSWorkspace.shared.openApplication(at: item.target, configuration: NSWorkspace.OpenConfiguration())
+        case .localApp: openLocal(item)
+        case .session: Sessions.resume(item)
         case .settings, .place, .person, .web: NSWorkspace.shared.open(item.target)
         case .deeplink:
             // id carries "deeplink:<bundle>|<web address>", so a link the app refuses still opens in the browser.
@@ -282,6 +339,70 @@ enum Launcher {
             Launchable(id: "place:" + url.path, kind: .place, title: title, subtitle: "Folder in Finder", target: url,
                        iconPath: url.path, phrases: [title, title + " folder"] + synonyms)
         }
+    }
+
+    /// Apps in ~/claude-apps: mostly small servers with a manifest rather than .app bundles,
+    /// so the row opens the manifest's URL and starts the server first when nothing is listening.
+    private static func localApps() -> [Launchable] {
+        let root = NSHomeDirectory() + "/claude-apps"
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else { return [] }
+        return names.sorted().compactMap { name -> Launchable? in
+            let folder = root + "/" + name
+            guard let data = FileManager.default.contents(atPath: folder + "/.claude-app.json"),
+                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            let title = (manifest["name"] as? String) ?? name
+            let opens = (manifest["open"] as? String ?? "").replacingOccurrences(of: "~", with: NSHomeDirectory())
+            let target = URL(string: opens.isEmpty ? "file://" + folder : opens) ?? URL(fileURLWithPath: folder)
+            let port = (manifest["port"] as? Int).map { " · :\($0)" } ?? ""
+            let detail = (manifest["description"] as? String ?? "").split(separator: ".").first.map(String.init) ?? ""
+            return Launchable(id: "local:" + folder, kind: .localApp, title: title,
+                              subtitle: "claude-apps/\(name)\(port) · \(detail)".trimmingCharacters(in: .whitespaces),
+                              target: target, iconPath: folder + "/.claude-app.json",
+                              phrases: [title, name.replacingOccurrences(of: "-", with: " ")], badge: "Local app")
+        }
+    }
+
+    /// Opens a local app, starting its server when the port is dead.
+    private static func openLocal(_ item: Launchable) {
+        let folder = String(item.id.dropFirst("local:".count))
+        guard item.target.scheme?.hasPrefix("http") == true, let port = item.target.port else {
+            NSWorkspace.shared.open(item.target)
+            return
+        }
+        if listening(port) {
+            NSWorkspace.shared.open(item.target)
+            return
+        }
+        guard let data = FileManager.default.contents(atPath: folder + "/.claude-app.json"),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entry = manifest["entry"] as? String else { return }
+        let runner = (manifest["type"] as? String) == "node" ? "/usr/bin/env" : "/usr/bin/env"
+        let arguments = (manifest["type"] as? String) == "node" ? ["node", entry] : ["python3", entry]
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: runner)
+        task.arguments = arguments
+        task.currentDirectoryURL = URL(fileURLWithPath: folder)
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        // Give the server a moment to bind before the browser asks for the page.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
+            NSWorkspace.shared.open(item.target)
+        }
+    }
+
+    private static func listening(_ port: Int) -> Bool {
+        let socket = socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { return false }
+        defer { close(socket) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let ok = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
+        }
+        return ok
     }
 
     private static func apps() -> [Launchable] {

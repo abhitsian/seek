@@ -2,12 +2,12 @@ import Foundation
 
 /// The whole pipeline without the panel, for checking a search from the terminal.
 enum CommandLineSearch {
-    static func run(_ query: String, keywordsOnly: Bool, folder: URL?) {
+    static func run(_ rawQuery: String, keywordsOnly: Bool, folder: URL?) {
         // Keep the main run loop turning while the search runs: AppleScript (Chrome tabs) has to run on the main thread.
         final class Flag: @unchecked Sendable { var done = false }
         let flag = Flag()
         Task.detached {
-            await search(query, keywordsOnly: keywordsOnly, folder: folder)
+            await search(rawQuery, keywordsOnly: keywordsOnly, folder: folder)
             DispatchQueue.main.async { flag.done = true }
         }
         while !flag.done { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
@@ -15,19 +15,31 @@ enum CommandLineSearch {
 
     private static func milliseconds(since start: Date) -> Int { Int(Date().timeIntervalSince(start) * 1000) }
 
-    private static func search(_ query: String, keywordsOnly: Bool, folder: URL?) async {
+    private static func search(_ rawQuery: String, keywordsOnly: Bool, folder: URL?) async {
         Launcher.refresh()
-        let commands = Commands.analyze(query)
-        for item in commands.rows {
-            print("command  \(item.title) · \(item.subtitle) · \(item.target.absoluteString)")
+        // Same order the panel uses: scopes narrow the sources, then apps, tabs, sessions, web.
+        let (only, query) = Scope.read(rawQuery)
+        func wants(_ scope: Scope) -> Bool { only.isEmpty || only.contains(scope) }
+        if !only.isEmpty { print("scope    " + only.map { $0.label }.sorted().joined(separator: ", ")) }
+        let catalog = Launcher.matches(query)
+            .filter { match in only.isEmpty || only.contains { $0.kinds.contains(match.kind) } }
+        let commands = Commands.analyze(query, scopes: only)
+        var sessions: [Launchable] = []
+        let asksForSession = query.lowercased().split(whereSeparator: { !$0.isLetter }).contains {
+            ["session", "sessions", "transcript", "conversation", "earlier", "yesterday", "built", "worked"].contains(String($0))
         }
-        if commands.isCommand { return }
-        for item in Launcher.matches(query) {
-            print("launch   \(item.title) · \(item.subtitle) · \(item.target.isFileURL ? item.target.path : item.target.absoluteString)")
+        if wants(.sessions), only.contains(.sessions) || asksForSession {
+            sessions = Sessions.rows(for: query, limit: only.contains(.sessions) ? 8 : 2)
         }
+        for item in commands.rows.filter({ $0.kind == .person || $0.kind == .hint }) + catalog + sessions
+            + commands.rows.filter({ $0.kind != .person && $0.kind != .hint }) {
+            print("row      [\(item.label)] \(item.title) · \(item.subtitle)")
+        }
+        if commands.isCommand || (!only.isEmpty && !only.contains(.files)) { return }
+
         let client = keywordsOnly ? nil : Prefs.client
         let useApple = !keywordsOnly && client == nil && AppleReader.isAvailable
-        print("search   \(query)")
+        print("search   \(rawQuery)")
         print("reader   \(client.map { "Jev (\($0.model), key from \(Prefs.keySource))" } ?? (useApple ? "Apple Intelligence" : "word lists"))")
 
         var started = Date()

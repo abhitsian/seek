@@ -40,6 +40,14 @@ if let flag = arguments.firstIndex(of: "--teach"), flag + 2 < arguments.count {
     exit(0)
 }
 
+/// `Seek --index` indexes Claude Code transcripts for search, and reports how many are in.
+if arguments.contains("--index") {
+    let started = Date()
+    Sessions.refresh()
+    print("\(Sessions.count) sessions indexed in \(Int(Date().timeIntervalSince(started)))s")
+    exit(0)
+}
+
 /// `Seek --launchables` lists every app, Settings page and folder Seek can open.
 if arguments.contains("--launchables") {
     Launcher.refresh()

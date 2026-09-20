@@ -4,6 +4,7 @@ import SwiftUI
 /// A filter Seek read from the search, shown as a chip the user can remove.
 enum ChipID: Hashable {
     case folder, kind, dates, place, size, order, related
+    case scope(String)
     case keyword(String)
 }
 
@@ -48,7 +49,9 @@ final class SearchEngine: ObservableObject {
     private var plan: Plan?
     private var work: Task<Void, Never>?
 
-    var query: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// What was typed, with any @scope words taken out.
+    var query: String { Scope.read(text).rest }
+    var scopes: Set<Scope> { Scope.read(text).scopes }
     enum Item { case launch(Launchable), file(Ranked) }
 
     /// Launchables come first in the list, then files; `selected` indexes both.
@@ -90,6 +93,7 @@ final class SearchEngine: ObservableObject {
     func prepareToShow() {
         refreshReader()
         Launcher.refreshIfStale()
+        DispatchQueue.global(qos: .utility).async { Sessions.refresh() }
         DispatchQueue.global(qos: .utility).async { BrowserHistory.refreshIfStale() }
         if reader == .apple { AppleReader.prewarm() }
         finderFolder = nil
@@ -112,6 +116,11 @@ final class SearchEngine: ObservableObject {
     func select(file index: Int) { selected = launchables.count + index }
 
     func tap(_ chip: Chip) {
+        if case .scope(let name) = chip.id {
+            text = text.split(separator: " ").filter { !($0.hasPrefix("@") && $0.dropFirst().lowercased() == name) }
+                .joined(separator: " ")
+            return
+        }
         if chip.id == .folder {
             onlyInFolder = !chip.on
             if chip.on, plan?.place == .here { dismissed.insert(.place) }
@@ -131,15 +140,15 @@ final class SearchEngine: ObservableObject {
     func schedule(now: Bool = false) {
         work?.cancel()
         let query = self.query
+        let scopes = self.scopes
+        func wants(_ scope: Scope) -> Bool { scopes.isEmpty || scopes.contains(scope) }
         catalogMatches = query.isEmpty ? [] : Launcher.matches(query)
+            .filter { match in scopes.isEmpty || scopes.contains { $0.kinds.contains(match.kind) } }
         if catalogMatches != launchables {
             launchables = catalogMatches
             selected = 0
         }
-        // An empty search, or a request for a Settings page that matched one: no file search.
-        let opensSomething = !launchables.isEmpty
-            && (Launcher.isSettingsRequest(query) || Launcher.isLaunchRequest(query, matches: launchables))
-        guard !query.isEmpty, !opensSomething else {
+        guard !query.isEmpty else {
             plan = nil
             results = []
             chips = makeChips(nil)
@@ -153,10 +162,23 @@ final class SearchEngine: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             // Chat with someone, open a site, search the web: read before the file search, which a command replaces.
             if self.results.isEmpty { self.status = .working }
-            let commands = await Task.detached(priority: .userInitiated) { Commands.analyze(query) }.value
+            var commands = await Task.detached(priority: .userInitiated) { Commands.analyze(query, scopes: scopes) }.value
+            // Past Claude Code sessions: asked for by @claude, or when the search names one.
+            // Unscoped, sessions only surface when the search asks for one; @claude always searches them.
+            let asksForSession = query.lowercased().split(whereSeparator: { !$0.isLetter }).contains {
+                ["session", "sessions", "transcript", "conversation", "earlier", "yesterday", "built", "worked"].contains(String($0))
+            }
+            if wants(.sessions), scopes.contains(.sessions) || asksForSession {
+                let sessions = await Task.detached(priority: .utility) { Sessions.rows(for: query, limit: scopes.contains(.sessions) ? 8 : 2) }.value
+                commands.rows += sessions
+            }
             guard !Task.isCancelled else { return }
             self.merge(commands.rows)
-            if commands.isCommand {
+            // No file search when the search is a command, when it plainly opens something,
+            // or when an @scope asked for anything other than files.
+            let opens = !self.launchables.isEmpty
+                && (Launcher.isSettingsRequest(query) || Launcher.isLaunchRequest(query, matches: self.launchables))
+            if commands.isCommand || opens || !(scopes.isEmpty || scopes.contains(.files)) {
                 self.showCommandOnly()
                 return
             }
@@ -269,6 +291,7 @@ final class SearchEngine: ObservableObject {
             case .size: plan.size = .any; plan.minBytes = nil; plan.maxBytes = nil
             case .order: plan.order = .best
             case .related: plan.related = []
+            case .scope: break
             case .keyword(let word): plan.keywords.removeAll { $0 == word }
             case .folder: break
             }
@@ -301,6 +324,10 @@ final class SearchEngine: ObservableObject {
 
     private func makeChips(_ plan: Plan?) -> [Chip] {
         var chips: [Chip] = []
+        for scope in scopes.sorted(by: { $0.rawValue < $1.rawValue }) {
+            chips.append(Chip(id: .scope(scope.rawValue), label: scope.label, symbol: "at",
+                              help: "Searching only \(scope.label.lowercased()). Click to drop the scope."))
+        }
         if let folder = finderFolder {
             let on = plan.map { scopeFolder(for: $0) != nil } ?? onlyInFolder
             chips.append(Chip(id: .folder, label: "Only in \(folder.lastPathComponent)", symbol: on ? "folder.fill" : "folder",

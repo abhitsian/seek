@@ -168,6 +168,8 @@ struct SearchView: View {
     static func openLabel(_ kind: Launchable.Kind) -> String {
         switch kind {
         case .app: "Open app"
+        case .localApp: "Open local app"
+        case .session: "Resume session"
         case .settings: "Open Settings"
         case .place: "Open folder"
         case .person: "Open in Teams"
